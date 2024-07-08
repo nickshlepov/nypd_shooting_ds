@@ -1,0 +1,155 @@
+---
+title: "NYPD Shooting Analysis"
+author: "Nick S"
+date: "2024-06-05"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r libraries, include=FALSE}
+# some packages could be pre-installed with your current version of RStudio 
+# if needed copy-paste to your console and install the following packages
+#install.packages("tydyverse")
+#install.packages("dplyr")
+#install.packages("RColorBrewer")
+#install.packages("chron")
+library(tidyverse)
+library(chron)
+library(RColorBrewer)
+```
+
+
+
+```{r import NYPD shooting ds}
+shooting_ds <- read.csv("https://data.cityofnewyork.us/api/views/833y-fsy8/rows.csv")
+summary(shooting_ds)
+
+```
+That's a lot of data. Let's get rid of some columns we won't need.
+Also, some of the columns (for example, PERP_AGE_GROUP) have missing values. If we wanted to use them for our study, we would need to filter out all missing and suspicious values. Since we wont use them, let's just get rid of them for now too.
+
+
+```{r tidying dataset}
+# let's keep only columns we potentially need
+shooting_ds <- shooting_ds %>% 
+  select(-c(X_COORD_CD, Y_COORD_CD, LOC_OF_OCCUR_DESC, LOC_CLASSFCTN_DESC, LOCATION_DESC, Latitude, Longitude, Lon_Lat, PRECINCT, JURISDICTION_CODE, STATISTICAL_MURDER_FLAG, PERP_RACE, VIC_RACE, PERP_SEX, PERP_AGE_GROUP)) 
+
+summary(shooting_ds)
+head(shooting_ds, 5)
+```
+
+
+I have a hypothesis that some periods of the day are more dangerous than others. Let's see how many shooting cases happened during each hour of the day.
+We will play a little bit with the format of OCCUR_TIME, group by hours and summarize by the number of cases.
+
+```{r sort by time}
+shooting_by_HR <- shooting_ds %>%
+  mutate(OCCUR_TIME = as.POSIXct(OCCUR_TIME, format = "%H:%M:%S")) %>% 
+  mutate(OCCUR_TIME_HR = floor_date(OCCUR_TIME, "hour")) %>% 
+  group_by(OCCUR_TIME_HR) %>% 
+  summarize(cases = n()) %>% 
+  mutate(OCCUR_TIME_HR1 = format(OCCUR_TIME_HR, "%H:%M"),
+         OCCUR_TIME_HR1 = sub(":00$", ":00-59", OCCUR_TIME_HR1))
+
+head(shooting_by_HR,10)
+```
+
+
+Let's have a look at the plot. 
+
+```{r number of shootings per hour - plot, fig.width=10, fig.height=5}
+ggplot(data = shooting_by_HR, aes(x = OCCUR_TIME_HR1, y = cases, size = cases)) +
+geom_point(alpha = 0.6, color = "blue") +
+scale_size(range = c(2, 10)) + 
+labs(title = "Number of Shooting Cases by Hour",
+x = "Hour of the Day",
+y = "Number of Shootings",
+size = "Number of Shootings") +
+theme_minimal() +
+theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1))
+
+```
+
+Well, 7 pm to 5 am seem to be a dangerous time of the day. Is this pattern consistent for all boro's?
+By the way, how significant is the difference in their safety
+Let's group by boro and time of shooting and count cases.
+```{r sort by boro and time}
+
+shooting_in_boro_by_HR <- shooting_ds %>%
+     mutate(OCCUR_TIME = as.POSIXct(OCCUR_TIME, format = "%H:%M:%S")) %>% 
+     mutate(OCCUR_TIME_HR = floor_date(OCCUR_TIME, "hour")) %>% 
+     group_by(BORO, OCCUR_TIME_HR) %>% 
+     summarize(cases = n()) %>% 
+     mutate(OCCUR_TIME_HR1 = format(OCCUR_TIME_HR, "%H:%M"),
+            OCCUR_TIME_HR1 = sub(":00$", ":00-59", OCCUR_TIME_HR1))
+
+head(shooting_in_boro_by_HR,10)
+
+```
+
+Time to look at the plot. 
+```{r number of shootings in boros per hour - plot, fig.width=10, fig.height=5}
+ggplot(data = shooting_in_boro_by_HR, aes(x = OCCUR_TIME_HR1, y = cases, size = cases, color = BORO)) +
+     geom_point(alpha = 0.8) +
+     scale_size(range = c(2, 10)) + 
+     scale_color_brewer(palette = "Dark2") +  
+     labs(title = "Number of Shooting Cases in Boro by Hour",
+          x = "Hour of the Day",
+          y = "Number of Shootings",
+          size = "Number of Shootings",
+          color = "Boro") +
+     theme_minimal() +
+     theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1))
+
+```
+Staten Island seems to be very safe throughout all day.
+Manhattan and Queens look very similar.
+Also, if you have some business to do in Bronx of Brooklyn you might want to consider later am hours.
+
+Let's take one step back. Our first graph looks parabolic. We can try to fit a polynomial regression model of degree 2 (quadratic) and see if our prediction is accurate.
+
+```{r number of shootings in NYC per hour model}
+
+shooting_by_HR <- shooting_by_HR %>%
+  mutate(OCCUR_TIME_HR = as.numeric(OCCUR_TIME_HR))
+
+model <- lm(cases ~ poly(OCCUR_TIME_HR, 2), data = shooting_by_HR)
+summary(model)
+
+
+shooting_by_HR$predicted_cases <- predict(model, newdata = shooting_by_HR)
+```
+
+Time to take a look at the plot.
+```{r number of shootings in NYC per hour model - plot, fig.width=10, fig.height=5}
+ggplot(data = shooting_by_HR, aes(x = OCCUR_TIME_HR1, y = cases, size=cases)) +
+geom_point(alpha = 0.7, color = "blue") +
+geom_point(aes(y = predicted_cases, size=predicted_cases), color = "red", alpha = 0.7)+
+scale_size(range = c(2, 10)) + 
+labs(title = "Number of Shooting Cases in NYC by Hour (blue - fact, red - prediction)",
+x = "Hour of the Day",
+y = "Number of Shootings",
+size = "Number of Shootings") +
+theme_minimal() +
+theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1))
+```
+It seems to be relatively accurate although different boro's would give us very different patterns.
+Of course, a real research would require a way deeper study of any potential dependence.
+
+
+
+#### Potential Bias
+
+Several potential biases could affect the results, including but not limited by:
+
+1. Enforcement Practices. 
+Variations in policing strategies and priorities across different areas, influenced by factors like crime rates, population characteristics, and community preferences, could affect the frequency and nature of police shootings. This could introduce bias based on how law enforcement is conducted in different regions.
+
+2. Demographic Discrepancy. 
+The characteristics of individuals involved in police shootings may not reflect the demographics of the general population. Certain demographic groups might be overrepresented in these incidents, leading to a skewed dataset.
+
+3. Personal Bias. 
+The researcher may have a hypothesis influenced by personal biases, including religious, political, or economic views, which could affect the objectivity of the analysis.
